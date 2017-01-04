@@ -45,19 +45,19 @@ parser.add_argument('-d','--dest',
                     dest='nets',
                     default=[],
                     nargs='+',
-                    help="hosts to scan"
+                    help="hosts in CIDR notation to scan. example: -d 10.1.1.0/24 -d 10.1.1.2 -d 10.1.1.0/30 10.1.1.5"
 )
 parser.add_argument('-D', '--dest-file',
                     action="store",
                     dest='dest_file',
                     type=str,
-                    help="input file with hosts, one network or host per line"
+                    help="input file with hosts in CIDR, one network or host per line"
 )
 parser.add_argument('-o', '--output',
                     action="store",
                     dest='output',
                     type=str,
-                    help="log output file"
+                    help="write output to <file> instead of STDOUT"
 )
 parser.add_argument('-p','--ports', 
                     action="append",
@@ -65,20 +65,20 @@ parser.add_argument('-p','--ports',
                     type=str,
                     default=[],
                     nargs='+',
-                    help="ports to scan"
+                    help="ports to scan. example: -p 21 -p22-25 -p 80 443 8080-8090"
 )
 parser.add_argument('-P', '--ports-file',
                     action="store",
                     dest='ports_file',
                     type=str,
-                    help="input file with ports, one port per line"
+                    help="input file with ports, one port or port range per line"
 )
 parser.add_argument('-t', '--timeout',
                     action="store",
                     dest='timeout',
                     default=0.5,
                     type=float,
-                    help="connection timout in seconds"
+                    help="connection timout in seconds for each port"
 )
 parser.add_argument('-v', '--verbose',
                     action="count",
@@ -143,24 +143,37 @@ logger.setLevel(logger_level)
 list_flatten = lambda x: list(set([item for sublist in x for item in sublist]))
 
 if pArguments.ports: 
-  print(list_flatten(pArguments.ports))
-  for PORT in pArguments.ports:
-    print(PORT)
-  #  if '-' in str(PORT):
-  #    print(str(PORT).split('-'))
-  PORTS = []
+  PORTS = pArguments.ports
 else:
   PORTS = []
 
 if pArguments.ports_file:
   try:
     ports_file = open(pArguments.ports_file, 'r')
-    PORTS.append([int(PORT.rstrip('\n')) for PORT in ports_file])
   except:
     logger.debug("could not open file: {}".format(pArguments.ports_file))
+  try:
+    PORTS.append([PORT.rstrip('\n') for PORT in ports_file])
+  except:
+    logger.info("ports definition wrong: {} [SKIPPED]".format(PORT))
 
 if PORTS:
-  PORTS = sorted(list_flatten(PORTS))
+  PORTS_TMP = []
+  for PORT in list_flatten(PORTS):
+    if '-' in str(PORT):
+      portRange = str(PORT).split('-')
+      if len(portRange) > 2:
+        sys.exit("ports range definition wrong: {}".format(PORT))
+      try:
+        PORTS_TMP.append(list(range(int(portRange[0]),int(portRange[1])+1)))
+      except:
+        logger.info("ports definition wrong: {} [SKIPPED]".format(PORT))
+    else:
+      try:
+        PORTS_TMP.append([int(PORT)])
+      except:
+        logger.info("ports definition wrong: {} [SKIPPED]".format(PORT))
+  PORTS = sorted(list_flatten(PORTS_TMP))
   logger.debug("ports: {}".format(PORTS))
 else:
   sys.exit("no ports to scan")
