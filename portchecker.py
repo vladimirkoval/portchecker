@@ -16,7 +16,7 @@ def ports_check(tryHost, tryPorts, timeout):
   for tryPort in tryPorts:
     try:
       s = socket.socket(socket.AF_INET,  socket.SOCK_STREAM)
-      s.settimeout(TIMEOUT)
+      s.settimeout(timeout)
       if s.connect_ex((tryHost,tryPort)) == 0:
         openedPorts.append( tryPort )
       s.close
@@ -27,14 +27,13 @@ def ports_check(tryHost, tryPorts, timeout):
   #if openedPorts: logger.debug("found opened ports for host {}: {}".format(tryHost, openedPorts))
   return openedPorts 
 
-def check_connection_queue(tryPorts, hQueue, TIMEOUT):
+def check_connection_queue(tryPorts, hQueue, TIMEOUT, portsCheckSlice):
   openedPorts = []
   while not hQueue.empty():
     tryHost = str(hQueue.get())
     openedPorts = []
-    logger.debug("[{}] {} starting check {}".format(runTime(), threading.currentThread().getName(), tryHost))
+    logger.debug("[{}] [{}] starting check {}".format(runTime(), threading.currentThread().getName(), tryHost))
 
-    portsCheckSlice = 10
     oPorts = futures.ThreadPoolExecutor(max_workers=portsCheckSlice)
     wait_oPorts = [oPorts.submit(ports_check, tryHost, tryPorts[i:i+portsCheckSlice], TIMEOUT) for i in range(0,len(tryPorts),portsCheckSlice)] 
     for f in futures.as_completed(wait_oPorts):
@@ -44,7 +43,7 @@ def check_connection_queue(tryPorts, hQueue, TIMEOUT):
     if openedPorts:
       openedPorts.sort()
       logger.info("{}: {}".format(tryHost,str(openedPorts)))
-    logger.debug("[{}] {} check finished {}".format(runTime(), threading.currentThread().getName(), tryHost))
+    logger.debug("[{}] [{}] check finished {}".format(runTime(), threading.currentThread().getName(), tryHost))
     hQueue.task_done()
   return 
 
@@ -52,12 +51,19 @@ timeStart = time.time()
 runTime = lambda: round(time.time() - timeStart, 2)
 
 parser = argparse.ArgumentParser(description='just check open ports')
+parser.add_argument('-c', '--concurrency',
+                    action="store",
+                    dest='concurrency',
+                    default=100,
+                    type=int,
+                    help="connections per worker (default: 100)"
+)
 parser.add_argument('-d','--dest',
                     action="append",
                     dest='nets',
                     default=[],
                     nargs='+',
-                    help="hosts in CIDR notation to scan. example: -d 10.1.1.0/24 -d 10.1.1.2 -d 10.1.1.0/30 10.1.1.5"
+                    help="hosts in CIDR notation to scan (default: 127.0.0.1). example: -d 10.1.1.0/24 -d 10.1.1.2 -d 10.1.1.0/30 10.1.1.5"
 )
 parser.add_argument('-D', '--dest-file',
                     action="store",
@@ -77,7 +83,7 @@ parser.add_argument('-p','--ports',
                     type=str,
                     default=[],
                     nargs='+',
-                    help="ports to scan. example: -p 21 -p22-25 -p 80 443 8080-8090"
+                    help="ports to scan (default: 1-65535). example: -p 21 -p22-25 -p 80 443 8080-8090"
 )
 parser.add_argument('-P', '--ports-file',
                     action="store",
@@ -150,7 +156,6 @@ else:
   logger_level = 'INFO'
 
 logger.setLevel(logger_level)
-#consoleHandler.setLevel(logger_level)
 
 list_flatten = lambda x: list(set([item for sublist in x for item in sublist]))
 
@@ -184,10 +189,8 @@ if PORTS:
       except:
         logger.info("ports definition wrong: {} [SKIPPED]".format(PORT))
   PORTS = sorted(list_flatten(PORTS_TMP))
-  logger.debug("ports: {}".format(PORTS))
-  logger.debug("ports count: {}".format(len(PORTS)))
 else:
-  sys.exit("no ports to scan")
+  PORTS = list(range(65536))
 
 
 NETS = pArguments.nets
@@ -201,38 +204,30 @@ if pArguments.dest_file:
 
 if NETS:
   NETS = sorted(list_flatten(NETS))
-  logger.debug("nets: {}".format(NETS))
 else:
-  sys.exit("no hosts to scan")
+  NETS.append('127.0.0.1')
 
-if pArguments.timeout: 
-  TIMEOUT = pArguments.timeout
-  logger.debug("timeout: {} sec".format(TIMEOUT))
-
-if pArguments.workers: 
-  WORKERS = pArguments.workers
-  logger.debug("workers: {}".format(WORKERS))
-
+logger.debug("ports: {}".format(PORTS))
+logger.debug("ports count: {}".format(len(PORTS)))
+logger.debug("nets: {}".format(NETS))
+logger.debug("timeout: {} sec".format(pArguments.timeout))
+logger.debug("workers: {}".format(pArguments.workers))
+logger.debug("concurrency: {}".format(pArguments.concurrency))
 logger.debug("logging level: {}".format(logger_level))
 
-#HOSTS = [ 'localhost', 'ya.ru']
-#NETS = ['46.229.164.192/26','46.229.165.0/26','192.243.51.64/26','213.174.146.0/25','213.174.146.128/25']
-#PORTS = [22, 80, 443]
-#PORTS = list(range(1024))
-#WORKERS = 21
 
 hostsQueue = queue.Queue()
 try:
-  [hostsQueue.put(HOST) for NET in NETS for HOST in ipaddress.ip_network(NET).hosts()]
+  [hostsQueue.put(HOST) for NET in NETS for HOST in ipaddress.ip_network(NET)]
 except ValueError as host_err:
   logger.info("failed add {} [SKIPPED]".format(host_err)) 
 except:
   logger.info("something goes wrong with parsing hosts")
 logger.debug("number of hosts in queue: {}".format(str(hostsQueue.qsize())))
 
-for i in range(WORKERS):
+for i in range(pArguments.workers):
   logger.debug("current active workers: {}".format(str(threading.activeCount())))
-  t = threading.Thread(target=check_connection_queue, args=(PORTS,hostsQueue,TIMEOUT))
+  t = threading.Thread(target=check_connection_queue, args=(PORTS,hostsQueue, pArguments.timeout, pArguments.concurrency))
   t.start()
 
 main_thread = threading.currentThread()
