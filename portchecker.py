@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+from concurrent import futures
 import ipaddress
 import logging
 import logging.handlers
@@ -10,29 +11,40 @@ import socket
 import sys
 import threading
 
+def ports_check(tryHost, tryPorts, timeout):
+  openedPorts = []
+  for tryPort in tryPorts:
+    try:
+      s = socket.socket(socket.AF_INET,  socket.SOCK_STREAM)
+      s.settimeout(TIMEOUT)
+      if s.connect_ex((tryHost,tryPort)) == 0:
+        openedPorts.append( tryPort )
+      s.close
+    except socket.timeout:
+      logger.debug("{}:{} connection timeout".format(tryHost,tryPort))
+    except socket.error:
+      logger.debug("{}:{} other socket error".format(tryHost,tryPort))
+  #if openedPorts: logger.debug("found opened ports for host {}: {}".format(tryHost, openedPorts))
+  return openedPorts 
+
 def check_connection_queue(tryPorts, hQueue, TIMEOUT):
   openedPorts = []
   while not hQueue.empty():
     tryHost = str(hQueue.get())
     openedPorts = []
-      
-    logger.debug("{} starting check {}".format(threading.currentThread().getName(), tryHost))
-    for tryPort in tryPorts:
-      try:
-        s = socket.socket(socket.AF_INET,  socket.SOCK_STREAM)
-        s.settimeout(TIMEOUT)
-        if s.connect_ex((tryHost,tryPort)) == 0:
-          openedPorts.append( tryPort )
-        s.close
+    logger.debug("[{}] {} starting check {}".format(runTime(), threading.currentThread().getName(), tryHost))
 
-      except socket.timeout:
-        logger.debug("{}:{} connection timeout".format(tryHost,tryPort))
-      except socket.error:
-        logger.debug("{}:{} other socket error".format(tryHost,tryPort))
+    portsCheckSlice = 10
+    oPorts = futures.ThreadPoolExecutor(max_workers=portsCheckSlice)
+    wait_oPorts = [oPorts.submit(ports_check, tryHost, tryPorts[i:i+portsCheckSlice], TIMEOUT) for i in range(0,len(tryPorts),portsCheckSlice)] 
+    for f in futures.as_completed(wait_oPorts):
+      #logger.debug("opened ports {}: {}".format(tryHost, f.result()))
+      openedPorts.extend(f.result())
 
     if openedPorts:
+      openedPorts.sort()
       logger.info("{}: {}".format(tryHost,str(openedPorts)))
-    logger.debug(threading.currentThread().getName() + " check finished " + tryHost)
+    logger.debug("[{}] {} check finished {}".format(runTime(), threading.currentThread().getName(), tryHost))
     hQueue.task_done()
   return 
 
@@ -142,10 +154,8 @@ logger.setLevel(logger_level)
 
 list_flatten = lambda x: list(set([item for sublist in x for item in sublist]))
 
-if pArguments.ports: 
-  PORTS = pArguments.ports
-else:
-  PORTS = []
+
+PORTS = pArguments.ports
 
 if pArguments.ports_file:
   try:
@@ -175,13 +185,12 @@ if PORTS:
         logger.info("ports definition wrong: {} [SKIPPED]".format(PORT))
   PORTS = sorted(list_flatten(PORTS_TMP))
   logger.debug("ports: {}".format(PORTS))
+  logger.debug("ports count: {}".format(len(PORTS)))
 else:
   sys.exit("no ports to scan")
 
-if pArguments.nets:
-  NETS = pArguments.nets
-else:
-  NETS = []
+
+NETS = pArguments.nets
 
 if pArguments.dest_file: 
   try:
@@ -213,8 +222,12 @@ logger.debug("logging level: {}".format(logger_level))
 #WORKERS = 21
 
 hostsQueue = queue.Queue()
-[hostsQueue.put(HOST) for NET in NETS for HOST in ipaddress.ip_network(NET).hosts()]
-
+try:
+  [hostsQueue.put(HOST) for NET in NETS for HOST in ipaddress.ip_network(NET).hosts()]
+except ValueError as host_err:
+  logger.info("failed add {} [SKIPPED]".format(host_err)) 
+except:
+  logger.info("something goes wrong with parsing hosts")
 logger.debug("number of hosts in queue: {}".format(str(hostsQueue.qsize())))
 
 for i in range(WORKERS):
