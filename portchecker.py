@@ -45,7 +45,7 @@ def check_connection_queue(tryPorts, hQueue, TIMEOUT, portsCheckSlice):
   while not hQueue.empty():
     tryHost = str(hQueue.get())
     openedPorts = []
-    logger.debug("[%s] [%s] starting check %s", runTime(), threading.currentThread().getName(), tryHost)
+    logger.debug("[%s] [%s] starting check %s", runtime(), threading.currentThread().getName(), tryHost)
 
     oPorts = futures.ThreadPoolExecutor(max_workers=portsCheckSlice)
     wait_oPorts = [oPorts.submit(ports_check, tryHost, tryPorts[i:i + portsCheckSlice], TIMEOUT) for i in range(0, len(tryPorts), portsCheckSlice)]
@@ -56,14 +56,14 @@ def check_connection_queue(tryPorts, hQueue, TIMEOUT, portsCheckSlice):
     if openedPorts:
       openedPorts.sort()
       logger.info("%s: %s", tryHost, str(openedPorts))
-    logger.debug("[%s] [%s] check finished %s", runTime(), threading.currentThread().getName(), tryHost)
+    logger.debug("[%s] [%s] check finished %s", runtime(), threading.currentThread().getName(), tryHost)
     hQueue.task_done()
   return
 
 
 timeStart = time.time()
-#runTime = lambda: round(time.time() - timeStart, 2)
-def runTime():
+#runtime = lambda: round(time.time() - timeStart, 2)
+def runtime():
   """
   Return script running time
   """
@@ -264,4 +264,4 @@ for t in threading.enumerate():
 
 hostsQueue.join()
 
-logger.info("finished in %s seconds", runTime())
+logger.info("finished in %s seconds", runtime())
